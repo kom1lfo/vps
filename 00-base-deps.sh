@@ -4,11 +4,13 @@
 # Запускать ПЕРВЫМ, на свежем Debian 12
 # =============================================================
 set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 ok()  { echo -e "${GREEN}[OK]${NC}  $1"; }
 hdr() { echo -e "\n${YELLOW}>>> $1${NC}"; }
 err() { echo -e "${RED}[ERR]${NC} $1"; exit 1; }
+warn() { echo -e "${YELLOW}[!!]${NC}  $1"; }
 
 [[ $EUID -ne 0 ]] && err "Только от root"
 
@@ -71,8 +73,8 @@ ok "Python3 $(python3 --version) установлен"
 hdr "Безопасность (install без enable)"
 apt-get install -y fail2ban ufw
 # UFW и fail2ban НЕ запускаем — настроим позже отдельным скриптом
-systemctl disable ufw    2>/dev/null || true
-systemctl disable fail2ban 2>/dev/null || true
+systemctl disable --now ufw       2>/dev/null || true
+systemctl disable --now fail2ban  2>/dev/null || true
 ok "fail2ban, ufw установлены (не запущены — настройка позже)"
 
 hdr "Что НАМЕРЕННО НЕ установлено"
