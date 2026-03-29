@@ -25,7 +25,8 @@ apt-get install -y \
   net-tools iproute2 lsof \
   ca-certificates gnupg2 \
   apt-transport-https \
-  software-properties-common
+  software-properties-common \
+  sudo
 ok "Системные утилиты установлены"
 
 hdr "Диагностика DNS"
@@ -44,7 +45,7 @@ ok "WG-стек установлен"
 if modprobe xt_TPROXY 2>/dev/null; then
   ok "Модуль xt_TPROXY загружен"
 else
-  echo -e "${YELLOW}[!!]${NC}  xt_TPROXY не загрузился — TPROXY в wg0.conf может не работать"
+  warn "xt_TPROXY не загрузился — TPROXY в wg0.conf может не работать"
   echo "     Проверить после перезагрузки: lsmod | grep TPROXY"
 fi
 
@@ -78,7 +79,7 @@ echo "  Ядро:         $(uname -r)"
 hdr "Проверка необходимости перезагрузки"
 
 RUNNING_KERNEL=$(uname -r)
-INSTALLED_KERNEL=$(dpkg -l 'linux-image-*-amd64' 2>/dev/null \
+INSTALLED_KERNEL=$(dpkg -l 'linux-image-[0-9]*-amd64' 2>/dev/null \
   | awk '/^ii/{print $2}' | sort -V | tail -1 | sed 's/linux-image-//')
 
 if [[ "$RUNNING_KERNEL" != "$INSTALLED_KERNEL" ]]; then
