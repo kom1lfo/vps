@@ -20,6 +20,7 @@ running() { echo -e "  ${C}[..]${NC}    $1"; }
 result()  { echo -e "  ${G}[→]${NC}     $1"; }
 fail()    { echo -e "  ${R}[FAIL]${NC}  $1"; }
 die()     { echo -e "\n${R}[FATAL]${NC} $1\n"; exit 1; }
+err()     { echo -e "\n${R}[ERR]${NC} $1\n"; exit 1; }
 
 # ─── State-система (идемпотентность) ─────────────────────────
 # Каждый выполненный шаг записывается в state-файл.
@@ -38,9 +39,9 @@ KERNEL=$(uname -r)
 
 
 # =============================================================
-# ШАГ 1 / 4 — GPG-ключ Amnezia
+# Секция 1 - ШАГ 1 / 4 — GPG-ключ Amnezia
 # =============================================================
-hdr "ШАГ 1 / 4 — GPG-ключ Amnezia"
+hdr "Секция 1 - ШАГ 1 / 4 — GPG-ключ Amnezia"
 
 GPG_FILE="/usr/share/keyrings/amnezia.gpg"
 GPG_KEY="75c9dd72c799870e310542e24166f2c257290828"
@@ -73,9 +74,9 @@ else
 fi
 
 # =============================================================
-# ШАГ 2 / 4 — APT-репозиторий Amnezia PPA
+# Секция 1 - ШАГ 2 / 4 — APT-репозиторий Amnezia PPA
 # =============================================================
-hdr "ШАГ 2 / 4 — APT-репозиторий Amnezia PPA"
+hdr "Секция 1 - ШАГ 2 / 4 — APT-репозиторий Amnezia PPA"
 
 REPO_FILE="/etc/apt/sources.list.d/amnezia.list"
 
@@ -100,9 +101,9 @@ EOF
 fi
 
 # =============================================================
-# ШАГ 3 / 4 — Установка пакетов amneziawg + amneziawg-tools
+# Секция 1 - ШАГ 3 / 4 — Установка пакетов amneziawg + amneziawg-tools
 # =============================================================
-hdr "ШАГ 3 / 4 — Пакеты amneziawg + amneziawg-tools"
+hdr "Секция 1 - ШАГ 3 / 4 — Пакеты amneziawg + amneziawg-tools"
 
 pkg_installed() {
     dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
@@ -128,9 +129,9 @@ else
 fi
 
 # =============================================================
-# ШАГ 4 / 4 — Проверка модуля ядра amneziawg
+# Секция 1 - ШАГ 4 / 4 — Проверка модуля ядра amneziawg
 # =============================================================
-hdr "ШАГ 4 / 4 — Модуль ядра amneziawg"
+hdr "Секция 1 - ШАГ 4 / 4 — Модуль ядра amneziawg"
 
 running "modprobe amneziawg..."
 if modprobe amneziawg 2>/dev/null; then
@@ -159,12 +160,8 @@ else
     result "MODULE=WARN (lsmod miss)"
 fi
 
-
-
-
-
 # =============================================================
-# СЕКЦИЯ 1: Загрузка и валидация (без изменений системы)
+# СЕКЦИЯ 2: Загрузка и валидация (без изменений системы)
 # Rollback trap НЕ активен — нечего откатывать
 # =============================================================
 
@@ -186,8 +183,11 @@ for V in "${REQUIRED[@]}"; do
     [[ -z "${!V:-}" ]] && err "Переменная $V не задана или пустая в .env.vps"
     # Приватные ключи не выводим в лог — security
     if [[ "$V" == *"PRIVATE_KEY"* ]]; then
-        ok "$V = [СКРЫТО, длина: ${#!V} символов]" 2>/dev/null || \
-        ok "$V = [СКРЫТО]"
+if [[ "$V" == *"PRIVATE_KEY"* ]]; then
+    ok "$V = [СКРЫТО]"
+else
+    ok "$V = ${!V}"
+fi
     else
         ok "$V = ${!V}"
     fi
@@ -232,18 +232,6 @@ S4P=$(( AWG0_S4 + 56 ))
 [[ "$S4P" -eq "$AWG0_S2" ]] && err "S4+56=$S4P == S2=$AWG0_S2 — нарушение ограничения AWG"
 ok "S4+56=$S4P ≠ S1($AWG0_S1), ≠ S2($AWG0_S2) ✓"
 
-# --- Проверить AWG kernel module ---
-hdr "Проверка amneziawg kernel module"
-if ! lsmod | grep -q "^amneziawg"; then
-    warn "Модуль не загружен — пробуем modprobe"
-    modprobe amneziawg 2>/dev/null || true
-    sleep 1
-    if ! lsmod | grep -q "^amneziawg"; then
-        err "amneziawg module не загрузился. Проверь: dpkg -l amneziawg-dkms && uname -r"
-    fi
-fi
-ok "amneziawg module загружен ✓"
-
 # Проверить наличие awg-quick бинарника
 AWG_QUICK=$(command -v awg-quick 2>/dev/null) || \
     err "awg-quick не найден. Проверь: apt-get install amneziawg-tools"
@@ -263,11 +251,11 @@ ok "AWG0_NETWORK: $AWG0_NETWORK (из $AWG0_SUBNET)"
 
 
 # =============================================================
-# СЕКЦИЯ 0A: DNS — проверка, openresolv, минимальные правки
+# СЕКЦИЯ 3: DNS — проверка, openresolv, минимальные правки
 # Логика: 1) detect manager  2) test DNS  3) точечные правки
 #         4) resolvconf -u   5) финальная проверка
 # =============================================================
-hdr "СЕКЦИЯ 0A: DNS"
+hdr "СЕКЦИЯ 3: DNS"
 
 # --- 1. openresolv ---
 if ! command -v resolvconf &>/dev/null; then
@@ -400,10 +388,10 @@ else
 fi
 
 # =============================================================
-# СЕКЦИЯ 0B: sysctl — проверка параметров, применение если нужно
+# СЕКЦИЯ 4: sysctl — проверка параметров, применение если нужно
 # Файл: /etc/sysctl.d/99-ip-sysctl.conf
 # =============================================================
-hdr "СЕКЦИЯ 0B: sysctl параметры"
+hdr "СЕКЦИЯ 4: sysctl параметры"
 SYSCTL_FILE="/etc/sysctl.d/99-ip-sysctl.conf"
 touch "$SYSCTL_FILE"
 
@@ -445,10 +433,10 @@ fi
     || err "net.ipv4.ip_forward≠1 после sysctl — критическая ошибка"
 
 # =============================================================
-# СЕКЦИЯ 0C: xt_TPROXY kernel module
+# СЕКЦИЯ 5: xt_TPROXY kernel module
 # TPROXY — требует xt_TPROXY в ядре (стандартный Debian 12 KVM ✓)
 # =============================================================
-hdr "СЕКЦИЯ 0C: xt_TPROXY kernel module"
+hdr "СЕКЦИЯ 5: xt_TPROXY kernel module"
 
 if lsmod | grep -q "^xt_TPROXY"; then
     ok "xt_TPROXY уже загружен ✓"
@@ -467,7 +455,7 @@ fi
 
 
 # =============================================================
-# СЕКЦИЯ 2: Изменения системы — с этого момента активен rollback
+# СЕКЦИЯ 6: Изменения системы — с этого момента активен rollback
 # =============================================================
 
 CONF="/etc/amnezia/amneziawg/${AWG0_IFACE}.conf"
@@ -476,7 +464,7 @@ SERVICE_ENABLED_BY_US=false
 
 rollback() {
     local CODE=$?
-    echo -e "\n${RED}[ERR]${NC} Ошибка (код: $CODE) — откат изменений..."
+    echo -e "\n${R}[ERR]${NC} Ошибка (код: $CODE) — откат изменений..."
 
     # Всегда очищаем ключ из памяти при любом выходе
     unset AWG0_PRIVATE_KEY 2>/dev/null || true
@@ -499,7 +487,7 @@ rollback() {
         warn "Автозапуск awg-quick@${AWG0_IFACE} отключён"
     fi
 
-    echo -e "${RED}  Откат завершён. Исправь ошибку и запусти скрипт повторно.${NC}"
+    echo -e "${R}  Откат завершён. Исправь ошибку и запусти скрипт повторно.${NC}"
     exit "$CODE"
 }
 
@@ -552,9 +540,9 @@ ok "Директория готова"
 # ---------------------------------------------------------------
 hdr "Резервная копия конфига"
 if [[ -f "$CONF" ]]; then
-    BACKUP_CONF="${CONF}.bak.$(date +%Y%m%d%H%M%S)"
-    cp "$BACKUP_CONF" "$BACKUP_CONF" 2>/dev/null || cp "$CONF" "$BACKUP_CONF"
-    warn "Сохранён: $BACKUP_CONF"
+BACKUP_CONF="${CONF}.bak.$(date +%Y%m%d%H%M%S)"
+cp "$CONF" "$BACKUP_CONF"
+warn "Сохранён: $BACKUP_CONF"
 else
     ok "Конфиг отсутствует — создаём новый"
 fi
@@ -616,7 +604,7 @@ unset AWG0_PRIVATE_KEY
 ok "AWG0_PRIVATE_KEY очищен из памяти"
 
 # ---------------------------------------------------------------
-# Автозапуск — enable БЕЗ start
+# Секция 7 Автозапуск — enable БЕЗ start
 # ---------------------------------------------------------------
 hdr "systemctl enable awg-quick@${AWG0_IFACE}"
 
@@ -657,13 +645,20 @@ trap - ERR
 hdr "✅ ИТОГ"
 echo ""
 echo "  Шаблон юнита : /etc/systemd/system/awg-quick@.service"
-echo "  Экземпляр    : awg-quick@${AWG0_IFACE}.service (создан systemd)"
+echo "  Экземпляр    : awg-quick@${AWG0_IFACE}.service"
 echo "  Конфиг       : ${CONF} (chmod 600)"
+[[ -n "$BACKUP_CONF" ]] && echo "  Бекап        : ${BACKUP_CONF}"   # ← ДОБАВИТЬ
 echo "  Порт         : ${AWG0_PORT}/UDP"
 echo "  Подсеть      : ${AWG0_SUBNET}  →  ${AWG0_NETWORK}"
 echo "  DNS          : ${AWG0_DNS}"
 echo "  fwmark/table : 2 / 102"
 echo "  NET iface    : ${NET_IFACE}"
+echo "  Ядро         : $(uname -r)"                                  # ← ДОБАВИТЬ
+echo "  AWG модуль   : $(lsmod | grep amneziawg | awk '{print $1, "size:"$2}' || echo 'не в lsmod')"  # ← ДОБАВИТЬ
+echo "  xt_TPROXY    : $(lsmod | grep -q xt_TPROXY && echo 'загружен ✓' || echo 'не в lsmod')"       # ← ДОБАВИТЬ
+echo "  ip_forward   : $(sysctl -n net.ipv4.ip_forward)"             # ← ДОБАВИТЬ
+echo "  Обфускация   : Jc=${AWG0_JC} Jmin=${AWG0_JMIN} Jmax=${AWG0_JMAX} S1=${AWG0_S1} S2=${AWG0_S2} S3=${AWG0_S3} S4=${AWG0_S4}"
+echo "  State файл   : ${STATE_FILE}"                                 # ← ДОБАВИТЬ
 echo ""
 warn "НЕ ЗАПУЩЕН — старт только после установки AGH:"
 warn "  awg-quick up ${AWG0_IFACE}"
