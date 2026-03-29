@@ -34,7 +34,6 @@ ok "dnsutils (dig/nslookup) установлен"
 
 hdr "WireGuard + DNS-менеджер + QR"
 apt-get install -y \
-  wireguard \
   wireguard-tools \
   openresolv \
   qrencode \
@@ -49,25 +48,8 @@ else
   echo "     Проверить после перезагрузки: lsmod | grep TPROXY"
 fi
 
-hdr "DKMS + linux-headers (для AmneziaWG)"
-CURRENT_KERNEL=$(uname -r)
-apt-get install -y dkms linux-headers-amd64 linux-image-amd64
-
-NEW_KERNEL=$(dpkg -l 'linux-image-*-amd64' 2>/dev/null \
-  | awk '/^ii/{print $2}' | sort -V | tail -1 | sed 's/linux-image-//')
-
-if [[ "$NEW_KERNEL" != "$CURRENT_KERNEL" ]]; then
-  echo -e "${YELLOW}[!!]${NC}  Установлено новое ядро: $NEW_KERNEL"
-  echo -e "${YELLOW}[!!]${NC}  ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА перед установкой AWG!"
-  echo "     Команда: reboot"
-  echo "     После перезагрузки продолжай со скрипта install-wg.sh"
-else
-  ok "Ядро актуальное ($CURRENT_KERNEL), перезагрузка не нужна"
-fi
-ok "DKMS + linux-headers готовы"
-
 hdr "Python3 (для WGDashboard)"
-apt-get install -y python3 python3-pip python3-venv sudo
+apt-get install -y python3 python3-pip python3-venv
 ok "Python3 $(python3 --version) установлен"
 
 hdr "Безопасность (install без enable)"
