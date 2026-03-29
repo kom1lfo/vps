@@ -65,11 +65,6 @@ if dig +short +time=3 google.com @8.8.8.8 > /dev/null 2>&1; then
 else
     bad "8.8.8.8 — НЕ доступен (проблема с сетью или firewall)"
 fi
-if dig +short +time=3 google.com @1.1.1.1 > /dev/null 2>&1; then
-    ok "1.1.1.1 — доступен"
-else
-    bad "1.1.1.1 — НЕ доступен"
-fi
 
 hdr "8. ИТОГ И РЕКОМЕНДАЦИИ"
 
@@ -91,7 +86,7 @@ if [[ "$RESOLVED_ACTIVE" == true ]]; then
         echo "    sudo systemctl restart systemd-resolved"
         echo ""
         echo "  После этого AGH сможет занять порт 53."
-        echo "  AGH настроить как upstream: 1.1.1.1, 8.8.8.8"
+        echo "  AGH настроить как upstream: 8.8.8.8"
         echo "  В resolved.conf прописать: DNS=127.0.0.1"
     else
         ok "  Stub listener уже отключён — AGH можно ставить сразу"
@@ -104,7 +99,7 @@ elif [[ "$NM_ACTIVE" == true ]]; then
     CON=$(nmcli -t -f NAME con show --active | head -1)
     echo ""
     echo "  Применить вручную:"
-    echo "    nmcli con mod \"${CON}\" ipv4.dns \"1.1.1.1 8.8.8.8\""
+    echo "    nmcli con mod \"${CON}\" ipv4.dns \"8.8.8.8 1.1.1.1\""
     echo "    nmcli con mod \"${CON}\" ipv4.ignore-auto-dns yes"
     echo "    nmcli con up \"${CON}\""
 
@@ -120,7 +115,6 @@ else
         echo ""
         echo "    sudo rm -f /etc/resolv.conf"
         echo "    sudo tee /etc/resolv.conf <<EOF"
-        echo "nameserver 1.1.1.1"
         echo "nameserver 8.8.8.8"
         echo "options timeout:2 attempts:3"
         echo "EOF"
