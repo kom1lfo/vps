@@ -33,7 +33,7 @@ hdr "Диагностика DNS"
 apt-get install -y dnsutils     # dig, nslookup, host
 ok "dnsutils (dig/nslookup) установлен"
 
-hdr "WireGuard + DNS-менеджер + QR"
+hdr "WireGuard + QR"
 apt-get install -y \
   wireguard-tools \
   qrencode \
@@ -63,12 +63,13 @@ else
   ok "DKMS готов к сборке модулей (AWG, и др.)"
 fi
 
-# Проверить что xt_TPROXY доступен (нужен для TPROXY-конфига wg0)
+hdr "Проверка xt_TPROXY"
+# Нужен только если дальше реально используется TPROXY-конфиг
 if modprobe xt_TPROXY 2>/dev/null; then
   ok "Модуль xt_TPROXY загружен"
 else
-  warn "xt_TPROXY не загрузился — TPROXY в wg0.conf может не работать"
-  echo "     Проверить после перезагрузки: lsmod | grep TPROXY"
+  warn "xt_TPROXY не загрузился — TPROXY-конфиг WireGuard может не работать"
+  echo "     Проверить после перезагрузки: lsmod | grep -E 'xt_TPROXY|TPROXY'"
 fi
 
 hdr "Python3 (для WGDashboard)"
@@ -89,13 +90,12 @@ echo "  certbot         — 3x-ui использует встроенный ACME
 echo "  resolvconf (старый Debian-пакет) — конфликтует с openresolv"
 
 hdr "✅ Итог"
-echo "  WireGuard:    $(wg --version)"
-echo "  openresolv:   $(resolvconf --version 2>/dev/null || echo 'OK')"
-echo "  Python3:      $(python3 --version)"
+hdr "Итог"
+echo "  WireGuard:        $(wg --version)"
+echo "  Python3:          $(python3 --version)"
 echo "  DKMS:             $(dkms --version)"
 echo "  Ядро запущено:    $RUNNING_KERNEL"
 echo "  Ядро установлено: $INSTALLED_KERNEL"
-echo "  Ядро:         $(uname -r)"
 
 # =============================================================
 # ФИНАЛ: проверить нужна ли перезагрузка
