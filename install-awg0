@@ -23,6 +23,12 @@ die()     { echo -e "\n${R}[FATAL]${NC} $1\n"; exit 1; }
 err()     { echo -e "\n${R}[ERR]${NC} $1\n"; exit 1; }
 err_trap() { echo -e "\n${R}[ERR]${NC} $1\n"; false; }
 
+# ┌─ Зоны применения ──────────────────────────────────────────┐
+# │  err()      → Секции 1–5  (до trap rollback ERR)           │
+# │  die()      → Секции 1–5  (до trap rollback ERR)           │
+# │  err_trap() → Секция 6+   (ВНУТРИ зоны trap rollback ERR)  │
+# └────────────────────────────────────────────────────────────┘
+
 # ─── State-система (идемпотентность) ─────────────────────────
 # Каждый выполненный шаг записывается в state-файл.
 # При повторном запуске шаг пропускается.
@@ -504,7 +510,11 @@ rollback() {
     exit "$CODE"
 }
 
+# ⚠️  ГРАНИЦА ROLLBACK TRAP — с этой строки активен rollback
+# ⚠️  НЕ использовать err() / die() — они вызывают exit 1 напрямую и обходят rollback
+# ⚠️  Для сообщений об ошибках использовать ТОЛЬКО err_trap()
 trap rollback ERR
+
 
 # ---------------------------------------------------------------
 # Проверить и создать шаблон awg-quick@.service
@@ -672,10 +682,8 @@ ExecStart=/usr/bin/env awg-quick up /etc/amnezia/amneziawg/%i.conf
 ExecStop=/usr/bin/env awg-quick down /etc/amnezia/amneziawg/%i.conf
 
 if [[ "$STRIP_FAILED" == true ]]; then
-    echo ""
     echo "$STRIP_OUTPUT"
-    echo -e "\n${R}[ERR]${NC} awg-quick strip ${AWG0_IFACE} вернул ошибку\n"
-    false  # false возвращает код 1 → ERR trap → rollback() корректно срабатывает
+    err_trap "awg-quick strip ${AWG0_IFACE} вернул ошибку — конфиг откатывается"
 fi
 STRIP_LINES=$(echo "$STRIP_OUTPUT" | wc -l)
 ok "Синтаксис конфига валиден ✓ (strip: ${STRIP_LINES} строк WG-конфига)"
