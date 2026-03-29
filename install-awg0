@@ -21,6 +21,7 @@ result()  { echo -e "  ${G}[→]${NC}     $1"; }
 fail()    { echo -e "  ${R}[FAIL]${NC}  $1"; }
 die()     { echo -e "\n${R}[FATAL]${NC} $1\n"; exit 1; }
 err()     { echo -e "\n${R}[ERR]${NC} $1\n"; exit 1; }
+err_trap() { echo -e "\n${R}[ERR]${NC} $1\n"; false; }
 
 # ─── State-система (идемпотентность) ─────────────────────────
 # Каждый выполненный шаг записывается в state-файл.
@@ -37,6 +38,13 @@ mark_done() { grep -qxF "$1" "$STATE_FILE" 2>/dev/null || echo "$1" >> "$STATE_F
 
 KERNEL=$(uname -r)
 
+# Проверка утсановки gnupg2:
+if ! command -v gpg &>/dev/null; then
+    running "gpg не найден — устанавливаем gnupg2..."
+    apt-get update -q
+    apt-get install -y gnupg2
+    ok "gnupg2 установлен"
+fi
 
 # =============================================================
 # Секция 1 - ШАГ 1 / 4 — GPG-ключ Amnezia
@@ -215,6 +223,12 @@ for i in 0 1 2 3; do
 done
 ok "H1-H4 уникальны ✓"
 
+# Единственное официальное S-ограничение: S1+56 ≠ S2
+S1P=$(( AWG0_S1 + 56 ))
+[[ "$S1P" -ne "$AWG0_S2" ]] || \
+    err "S1+56=$S1P == S2=$AWG0_S2 — нарушение ограничения AWG (S1+56 ≠ S2)"
+ok "S1+56=$S1P ≠ S2($AWG0_S2) ✓"
+
 # S3 + 56 ≠ S1  и  S3 + 56 ≠ S2
 S3P=$(( AWG0_S3 + 56 ))
 [[ "$S3P" -ne "$AWG0_S1" ]] || err "S3+56=$S3P == S1=$AWG0_S1 — нарушение ограничения AWG"
@@ -226,6 +240,10 @@ S4P=$(( AWG0_S4 + 56 ))
 [[ "$S4P" -ne "$AWG0_S1" ]] || err "S4+56=$S4P == S1=$AWG0_S1 — нарушение ограничения AWG"
 [[ "$S4P" -ne "$AWG0_S2" ]] || err "S4+56=$S4P == S2=$AWG0_S2 — нарушение ограничения AWG"
 ok "S4+56=$S4P ≠ S1($AWG0_S1), ≠ S2($AWG0_S2) ✓"
+
+[[ "$AWG0_S4" -le 32 ]] || \
+    err "S4=${AWG0_S4} превышает максимум 32 — нарушение ограничения AWG"
+ok "S4=${AWG0_S4} ≤ 32 ✓"
 
 # Проверить наличие awg-quick бинарника
 AWG_QUICK=$(command -v awg-quick 2>/dev/null) || \
@@ -404,8 +422,9 @@ for KEY in "${!SYSCTL_NEEDED[@]}"; do
     ACTUAL=$(sysctl -n "$KEY" 2>/dev/null || echo "")
     if [[ "$ACTUAL" != "$EXPECTED" ]]; then
         warn "$KEY = '${ACTUAL:-не задан}' → нужно $EXPECTED"
-        if grep -q "^${KEY}" "$SYSCTL_FILE" 2>/dev/null; then
-            sed -i "s|^${KEY}.*|${KEY}=${EXPECTED}|" "$SYSCTL_FILE"
+        KEY_ESC="${KEY//./\\.}"
+        if grep -q "^${KEY_ESC}" "$SYSCTL_FILE" 2>/dev/null; then
+            sed -i "s|^${KEY_ESC}.*|${KEY}=${EXPECTED}|" "$SYSCTL_FILE"
         else
             echo "${KEY}=${EXPECTED}" >> "$SYSCTL_FILE"
         fi
@@ -437,11 +456,10 @@ if lsmod | grep -q "^xt_TPROXY"; then
     ok "xt_TPROXY уже загружен ✓"
 elif modprobe xt_TPROXY 2>/dev/null; then
     ok "xt_TPROXY загружен через modprobe ✓"
-    # Добавить в автозагрузку при старте системы
-if [[ ! -f /etc/modules-load.d/xt_TPROXY.conf ]]; then
-    echo "xt_TPROXY" > /etc/modules-load.d/xt_TPROXY.conf
-    ok "xt_TPROXY → /etc/modules-load.d/xt_TPROXY.conf (systemd автозагрузка)"
-fi
+    if [[ ! -f /etc/modules-load.d/xt_TPROXY.conf ]]; then
+        echo "xt_TPROXY" > /etc/modules-load.d/xt_TPROXY.conf
+        ok "xt_TPROXY → /etc/modules-load.d/xt_TPROXY.conf"
+    fi
 else
     warn "xt_TPROXY не загружается — PostUp TPROXY-правила могут не работать"
     warn "Диагностика: modinfo xt_TPROXY && uname -r"
@@ -648,7 +666,10 @@ SERVICE_ENABLE_STATUS="$ENABLED_STATUS"
 # ---------------------------------------------------------------
 hdr "Тест синтаксиса: awg-quick strip ${AWG0_IFACE}"
 STRIP_FAILED=false
-STRIP_OUTPUT=$(awg-quick strip "${AWG0_IFACE}" 2>&1) || STRIP_FAILED=true
+STRIP_OUTPUT=$(awg-quick strip "$CONF" 2>&1) || STRIP_FAILED=true
+# и в unit:
+ExecStart=/usr/bin/env awg-quick up /etc/amnezia/amneziawg/%i.conf
+ExecStop=/usr/bin/env awg-quick down /etc/amnezia/amneziawg/%i.conf
 
 if [[ "$STRIP_FAILED" == true ]]; then
     echo ""
