@@ -86,7 +86,7 @@ echo "  resolvconf (старый Debian-пакет) — конфликтует �
 
 hdr "✅ Итог"
 echo "  wireguard-tools:  $(dpkg-query -W -f='${Version}' wireguard-tools 2>/dev/null || echo 'неизвестно')"
-echo "  ok "$(python3 --version) установлен"
+echo "  ok $(python3 --version) установлен"
 echo "  DKMS:             $(dkms --version)"
 echo "  Ядро запущено:    $RUNNING_KERNEL"
 echo "  Ядро установлено: $INSTALLED_KERNEL"
