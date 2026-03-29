@@ -109,7 +109,7 @@ if [[ "$RUNNING_KERNEL" != "$INSTALLED_KERNEL" ]]; then
     echo "  Команда: reboot"
     echo "  После перезагрузки: bash /root/scripts/install-wg.sh"
 else
-    ok "Ядро актуальное ($RUNNING_KERNEL) — перезагрузка не требуется"
+    ok "Ядро актуальное: $RUNNING_KERNEL. Перезагрузка не требуется"
     echo ""
     ok "Можно сразу запускать: bash /root/scripts/install-wg.sh"
 fi
