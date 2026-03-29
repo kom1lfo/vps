@@ -36,10 +36,32 @@ ok "dnsutils (dig/nslookup) установлен"
 hdr "WireGuard + DNS-менеджер + QR"
 apt-get install -y \
   wireguard-tools \
-  openresolv \
   qrencode \
   iptables
 ok "WG-стек установлен"
+
+hdr "DKMS + linux-headers (для AmneziaWG)"
+# Фиксируем ядро ДО установки — это то, что сейчас запущено
+RUNNING_KERNEL=$(uname -r)
+
+apt-get install -y dkms linux-headers-amd64 linux-image-amd64
+ok "dkms, linux-headers-amd64, linux-image-amd64 установлены"
+
+# Что dpkg считает последним установленным ядром
+# Glob [0-9]* — только версионные ядра, исключает linux-image-cloud-amd64 и т.п.
+INSTALLED_KERNEL=$(dpkg -l 'linux-image-[0-9]*-amd64' 2>/dev/null \
+  | awk '/^ii/{print $2}' | sort -V | tail -1 | sed 's/linux-image-//')
+
+if [[ "$RUNNING_KERNEL" != "$INSTALLED_KERNEL" ]]; then
+  warn "Установлено новое ядро : $INSTALLED_KERNEL"
+  warn "Запущено сейчас        : $RUNNING_KERNEL"
+  warn "ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА — DKMS и AWG собираются под новое ядро!"
+  echo "     Команда: reboot"
+  echo "     После перезагрузки: bash /root/scripts/install-wg.sh"
+else
+  ok "Ядро актуальное ($RUNNING_KERNEL) — перезагрузка не нужна"
+  ok "DKMS готов к сборке модулей (AWG, и др.)"
+fi
 
 # Проверить что xt_TPROXY доступен (нужен для TPROXY-конфига wg0)
 if modprobe xt_TPROXY 2>/dev/null; then
@@ -70,17 +92,15 @@ hdr "✅ Итог"
 echo "  WireGuard:    $(wg --version)"
 echo "  openresolv:   $(resolvconf --version 2>/dev/null || echo 'OK')"
 echo "  Python3:      $(python3 --version)"
-echo "  DKMS:         $(dkms --version)"
+echo "  DKMS:             $(dkms --version)"
+echo "  Ядро запущено:    $RUNNING_KERNEL"
+echo "  Ядро установлено: $INSTALLED_KERNEL"
 echo "  Ядро:         $(uname -r)"
 
 # =============================================================
 # ФИНАЛ: проверить нужна ли перезагрузка
 # =============================================================
 hdr "Проверка необходимости перезагрузки"
-
-RUNNING_KERNEL=$(uname -r)
-INSTALLED_KERNEL=$(dpkg -l 'linux-image-[0-9]*-amd64' 2>/dev/null \
-  | awk '/^ii/{print $2}' | sort -V | tail -1 | sed 's/linux-image-//')
 
 if [[ "$RUNNING_KERNEL" != "$INSTALLED_KERNEL" ]]; then
     echo ""
