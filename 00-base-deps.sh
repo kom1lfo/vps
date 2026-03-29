@@ -24,7 +24,6 @@ apt-get install -y \
   curl wget git unzip nano htop \
   net-tools iproute2 lsof \
   ca-certificates gnupg2 \
-  apt-transport-https \
   software-properties-common \
   sudo
 ok "Системные утилиты установлены"
@@ -52,15 +51,10 @@ ok "dkms, linux-headers-amd64, linux-image-amd64 установлены"
 INSTALLED_KERNEL=$(dpkg -l 'linux-image-[0-9]*-amd64' 2>/dev/null \
   | awk '/^ii/{print $2}' | sort -V | tail -1 | sed 's/linux-image-//')
 
-if [[ "$RUNNING_KERNEL" != "$INSTALLED_KERNEL" ]]; then
-  warn "Установлено новое ядро : $INSTALLED_KERNEL"
-  warn "Запущено сейчас        : $RUNNING_KERNEL"
-  warn "ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА — DKMS и AWG собираются под новое ядро!"
-  echo "     Команда: reboot"
-  echo "     После перезагрузки: bash /root/scripts/install-wg.sh"
-else
-  ok "Ядро актуальное ($RUNNING_KERNEL) — перезагрузка не нужна"
-  ok "DKMS готов к сборке модулей (AWG, и др.)"
+if [[ -z "$INSTALLED_KERNEL" ]]; then
+  warn "Не удалось определить версию установленного ядра через dpkg"
+  warn "Проверить вручную: dpkg -l 'linux-image-*'"
+  INSTALLED_KERNEL="$RUNNING_KERNEL"   # принять как «без изменений»
 fi
 
 hdr "Проверка xt_TPROXY"
@@ -91,7 +85,6 @@ echo "  openresolv перенесён в отдельный скрипт нас�
 echo "  resolvconf (старый Debian-пакет) — конфликтует с openresolv"
 
 hdr "✅ Итог"
-hdr "Итог"
 echo "  WireGuard:        $(wg --version)"
 echo "  Python3:          $(python3 --version)"
 echo "  DKMS:             $(dkms --version)"
