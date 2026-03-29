@@ -44,12 +44,19 @@ mark_done() { grep -qxF "$1" "$STATE_FILE" 2>/dev/null || echo "$1" >> "$STATE_F
 
 KERNEL=$(uname -r)
 
-# Проверка утсановки gnupg2:
+# Проверка установки gnupg2:
 if ! command -v gpg &>/dev/null; then
     running "gpg не найден — устанавливаем gnupg2..."
     apt-get update -q
     apt-get install -y gnupg2
     ok "gnupg2 установлен"
+fi
+
+# Проверка установки dnsutils (dig):
+if ! command -v dig &>/dev/null; then
+    running "dig не найден — устанавливаем dnsutils..."
+    apt-get install -y dnsutils
+    ok "dnsutils установлен"
 fi
 
 # =============================================================
@@ -386,7 +393,7 @@ fi
 if grep -q "trust-ad" /etc/resolv.conf 2>/dev/null; then
     ok "options trust-ad в /etc/resolv.conf ✓"
 else
-    NS_IN_RESOLV=$(grep '^nameserver' /etc/resolv.conf | head -1 | awk '{print $2}')
+    NS_IN_RESOLV=$(grep '^nameserver' /etc/resolv.conf 2>/dev/null | head -1 | awk '{print $2}' || true)
     if [[ "$NS_IN_RESOLV" == "127.0.0.1" ]]; then
         warn "resolv.conf → 127.0.0.1 (ожидаемо до установки AGH)"
     else
@@ -398,7 +405,7 @@ fi
 if dig +short +time=3 google.com > /dev/null 2>&1; then
     ok "Финальный тест DNS: разрешается ✓"
 else
-    NS_CHECK=$(grep '^nameserver' /etc/resolv.conf | head -1 | awk '{print $2}')
+    NS_CHECK=$(grep '^nameserver' /etc/resolv.conf 2>/dev/null | head -1 | awk '{print $2}' || true)
     if [[ "$NS_CHECK" == "127.0.0.1" || "$NS_CHECK" == "10.10.10.10" ]]; then
         warn "DNS через $NS_CHECK не работает — ожидаемо, AGH не установлен"
     else
@@ -537,8 +544,8 @@ Wants=network-online.target nss-lookup.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/awg-quick up %i
-ExecStop=/usr/bin/awg-quick down %i
+ExecStart=/usr/bin/env awg-quick up /etc/amnezia/amneziawg/%i.conf
+ExecStop=/usr/bin/env awg-quick down /etc/amnezia/amneziawg/%i.conf
 Environment=WG_ENDPOINT_RESOLUTION_RETRIES=infinity
 
 [Install]
@@ -677,9 +684,6 @@ SERVICE_ENABLE_STATUS="$ENABLED_STATUS"
 hdr "Тест синтаксиса: awg-quick strip ${AWG0_IFACE}"
 STRIP_FAILED=false
 STRIP_OUTPUT=$(awg-quick strip "$CONF" 2>&1) || STRIP_FAILED=true
-# и в unit:
-ExecStart=/usr/bin/env awg-quick up /etc/amnezia/amneziawg/%i.conf
-ExecStop=/usr/bin/env awg-quick down /etc/amnezia/amneziawg/%i.conf
 
 if [[ "$STRIP_FAILED" == true ]]; then
     echo "$STRIP_OUTPUT"
