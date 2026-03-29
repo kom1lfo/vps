@@ -438,10 +438,10 @@ if lsmod | grep -q "^xt_TPROXY"; then
 elif modprobe xt_TPROXY 2>/dev/null; then
     ok "xt_TPROXY загружен через modprobe ✓"
     # Добавить в автозагрузку при старте системы
-    if ! grep -q "^xt_TPROXY" /etc/modules 2>/dev/null; then
-        echo "xt_TPROXY" >> /etc/modules
-        ok "xt_TPROXY добавлен в /etc/modules (автозагрузка)"
-    fi
+if [[ ! -f /etc/modules-load.d/xt_TPROXY.conf ]]; then
+    echo "xt_TPROXY" > /etc/modules-load.d/xt_TPROXY.conf
+    ok "xt_TPROXY → /etc/modules-load.d/xt_TPROXY.conf (systemd автозагрузка)"
+fi
 else
     warn "xt_TPROXY не загружается — PostUp TPROXY-правила могут не работать"
     warn "Диагностика: modinfo xt_TPROXY && uname -r"
@@ -597,21 +597,26 @@ chown root:root "$CONF"
 ok "$CONF записан (chmod 600)"
 
 hdr "Вычисление публичного ключа"
-AWG0_PUBLIC_KEY=$(echo "${AWG0_PRIVATE_KEY}" | awg pubkey 2>/dev/null) || \
-    warn "Не удалось вычислить публичный ключ через awg pubkey"
 
-if [[ -z "${AWG0_PUBLIC_KEY_SAVED:-}" ]]; then
-    # Перезагрузить .env.vps чтобы учесть ранее сохранённый ключ
-    AWG0_PUBLIC_KEY_SAVED=$(grep "^AWG0_PUBLIC_KEY=" "$ENV_FILE" \
-        | cut -d= -f2- | tr -d '"' || echo "")
-fi
-if [[ -z "${AWG0_PUBLIC_KEY_SAVED:-}" ]]; then
-    echo "" >> "$ENV_FILE"
-    echo "# AWG0 публичный ключ сервера (авто-вычислен)" >> "$ENV_FILE"
-    echo "AWG0_PUBLIC_KEY=\"$AWG0_PUBLIC_KEY\"" >> "$ENV_FILE"
-    ok "AWG0_PUBLIC_KEY записан в .env.vps"
+
+AWG_PUBKEY_ERR=""
+AWG0_PUBLIC_KEY=$(echo "${AWG0_PRIVATE_KEY}" | awg pubkey 2>/tmp/awg_pubkey_err) || {
+    AWG_PUBKEY_ERR=$(cat /tmp/awg_pubkey_err 2>/dev/null)
+    warn "awg pubkey завершился с ошибкой: ${AWG_PUBKEY_ERR:-unknown}"
+}
+rm -f /tmp/awg_pubkey_err
+if [[ -n "${AWG0_PUBLIC_KEY:-}" ]]; then
+    ok "Публичный ключ вычислен: $AWG0_PUBLIC_KEY"
+    if grep -q "^AWG0_PUBLIC_KEY=" "$ENV_FILE" 2>/dev/null; then
+        ok "AWG0_PUBLIC_KEY уже в .env.vps — пропускаем"
+    else
+        printf '\n# AWG0 публичный ключ (авто-вычислен)\nAWG0_PUBLIC_KEY="%s"\n' \
+            "$AWG0_PUBLIC_KEY" >> "$ENV_FILE"
+        ok "AWG0_PUBLIC_KEY записан в .env.vps"
+    fi
 else
-    ok "AWG0_PUBLIC_KEY уже в .env.vps — пропускаем"
+    warn "AWG0_PUBLIC_KEY не получен — awg pubkey вернул пустую строку"
+    warn "Ключ не записан в .env.vps — проверь вручную: echo \$KEY | awg pubkey"
 fi
 
 # Очистить приватный ключ из памяти
@@ -677,10 +682,10 @@ echo "  fwmark/table : 2 / 102"
 echo "  NET iface    : ${NET_IFACE}"
 echo "  Автозапуск   : ${SERVICE_ENABLE_STATUS:-unknown}"
 echo "  Strip test   : PASS (${STRIP_LINES:-?} строк)"
-echo "  Ядро         : $(uname -r)"                                  # ← ДОБАВИТЬ
-echo "  AWG модуль   : $(lsmod | grep amneziawg | awk '{print $1, "size:"$2}' || echo 'не в lsmod')"  # ← ДОБАВИТЬ
-echo "  xt_TPROXY    : $(lsmod | grep -q xt_TPROXY && echo 'загружен ✓' || echo 'не в lsmod')"       # ← ДОБАВИТЬ
-echo "  ip_forward   : $(sysctl -n net.ipv4.ip_forward)"             # ← ДОБАВИТЬ
+echo "  Ядро         : $(uname -r)"
+echo "  AWG модуль   : $(lsmod | grep amneziawg | awk '{print $1, "size:"$2}' || echo 'не в lsmod')"
+echo "  xt_TPROXY    : $(lsmod | grep -q xt_TPROXY && echo 'загружен ✓' || echo 'не в lsmod')"
+echo "  ip_forward   : $(sysctl -n net.ipv4.ip_forward)"
 echo "  Обфускация   : Jc=${AWG0_JC} Jmin=${AWG0_JMIN} Jmax=${AWG0_JMAX} S1=${AWG0_S1} S2=${AWG0_S2} S3=${AWG0_S3} S4=${AWG0_S4}"
 echo "  State файл     : ${STATE_FILE} ($(wc -l < "$STATE_FILE" 2>/dev/null || echo 0) шагов)"
 echo ""
