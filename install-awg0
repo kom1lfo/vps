@@ -5,11 +5,11 @@
 set -euo pipefail
 
 # ─── Цвета ───────────────────────────────────────────────────
-G='\033[0;32m'    # green
-Y='\033[1;33m'    # yellow
-R='\033[0;31m'    # red
-C='\033[0;36m'    # cyan
-NC='\033[0m'
+G=$'\033[0;32m'    # green
+Y=$'\033[1;33m'    # yellow
+R=$'\033[0;31m'    # red
+C=$'\033[0;36m'    # cyan
+NC=$'\033[0m'
 
 # ─── Функции вывода ──────────────────────────────────────────
 hdr()     { echo -e "\n${Y}════ $1 ════${NC}"; }
@@ -182,15 +182,11 @@ REQUIRED=(
 for V in "${REQUIRED[@]}"; do
     [[ -z "${!V:-}" ]] && err "Переменная $V не задана или пустая в .env.vps"
     # Приватные ключи не выводим в лог — security
-    if [[ "$V" == *"PRIVATE_KEY"* ]]; then
 if [[ "$V" == *"PRIVATE_KEY"* ]]; then
     ok "$V = [СКРЫТО]"
 else
     ok "$V = ${!V}"
 fi
-    else
-        ok "$V = ${!V}"
-    fi
 done
 
 # Отдельная проверка длины приватного ключа (base64 WG ключ = 44 символа)
@@ -599,6 +595,9 @@ chmod 600 "$CONF"
 chown root:root "$CONF"
 ok "$CONF записан (chmod 600)"
 
+AWG0_PUBLIC_KEY=$(echo "${AWG0_PRIVATE_KEY}" | awg pubkey 2>/dev/null || echo "[ошибка вычисления]")
+ok "Публичный ключ сервера: ${AWG0_PUBLIC_KEY}"
+
 # Очистить приватный ключ из памяти
 unset AWG0_PRIVATE_KEY
 ok "AWG0_PRIVATE_KEY очищен из памяти"
@@ -629,12 +628,11 @@ fi
 # strip парсит файл и выводит stripped WG-конфиг без запуска
 # ---------------------------------------------------------------
 hdr "Тест синтаксиса: awg-quick strip ${AWG0_IFACE}"
-STRIP_OUT=$(awg-quick strip "${AWG0_IFACE}" 2>&1) && {
-    ok "Синтаксис конфига валиден ✓"
-} || {
-    err "awg-quick strip ${AWG0_IFACE} — ошибка парсинга конфига:
-${STRIP_OUT}"
-}
+if ! STRIP_OUT=$(awg-quick strip "${AWG0_IFACE}" 2>&1); then
+    fail "awg-quick strip ${AWG0_IFACE} — ошибка парсинга:"
+    fail "$STRIP_OUT"
+    false   # ← exit code 1 → set -e + trap rollback ERR срабатывает ✓
+fi
 
 # Всё прошло успешно — отключить trap
 trap - ERR
@@ -649,6 +647,7 @@ echo "  Экземпляр    : awg-quick@${AWG0_IFACE}.service"
 echo "  Конфиг       : ${CONF} (chmod 600)"
 [[ -n "$BACKUP_CONF" ]] && echo "  Бекап        : ${BACKUP_CONF}"   # ← ДОБАВИТЬ
 echo "  Порт         : ${AWG0_PORT}/UDP"
+echo "  Публичный ключ : ${AWG0_PUBLIC_KEY}"
 echo "  Подсеть      : ${AWG0_SUBNET}  →  ${AWG0_NETWORK}"
 echo "  DNS          : ${AWG0_DNS}"
 echo "  fwmark/table : 2 / 102"
