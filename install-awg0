@@ -180,7 +180,7 @@ REQUIRED=(
     AWG0_H1 AWG0_H2 AWG0_H3 AWG0_H4
 )
 for V in "${REQUIRED[@]}"; do
-    [[ -z "${!V:-}" ]] || err "Переменная $V не задана или пустая в .env.vps"
+    [[ -n "${!V:-}" ]] || err "Переменная $V не задана или пустая"
     if [[ "$V" == *"PRIVATE_KEY"* ]]; then
         ok "$V = [REDACTED]"
     else
@@ -199,7 +199,7 @@ ok "Все переменные AWG0_* присутствуют"
 hdr "Валидация AWG-параметров"
 
 # Jmin < Jmax
-[[ "$AWG0_JMIN" -ge "$AWG0_JMAX" ]] || \
+[[ "$AWG0_JMIN" -lt "$AWG0_JMAX" ]] || \
     err "Jmin($AWG0_JMIN) >= Jmax($AWG0_JMAX) — Jmin должен быть строго меньше Jmax"
 ok "Jmin($AWG0_JMIN) < Jmax($AWG0_JMAX) ✓"
 
@@ -217,14 +217,14 @@ ok "H1-H4 уникальны ✓"
 
 # S3 + 56 ≠ S1  и  S3 + 56 ≠ S2
 S3P=$(( AWG0_S3 + 56 ))
-[[ "$S3P" -eq "$AWG0_S1" ]] || err "S3+56=$S3P == S1=$AWG0_S1 — нарушение ограничения AWG"
-[[ "$S3P" -eq "$AWG0_S2" ]] || err "S3+56=$S3P == S2=$AWG0_S2 — нарушение ограничения AWG"
+[[ "$S3P" -ne "$AWG0_S1" ]] || err "S3+56=$S3P == S1=$AWG0_S1 — нарушение ограничения AWG"
+[[ "$S3P" -ne "$AWG0_S2" ]] || err "S3+56=$S3P == S2=$AWG0_S2 — нарушение ограничения AWG"
 ok "S3+56=$S3P ≠ S1($AWG0_S1), ≠ S2($AWG0_S2) ✓"
 
 # S4 + 56 ≠ S1  и  S4 + 56 ≠ S2
 S4P=$(( AWG0_S4 + 56 ))
-[[ "$S4P" -eq "$AWG0_S1" ]] || err "S4+56=$S4P == S1=$AWG0_S1 — нарушение ограничения AWG"
-[[ "$S4P" -eq "$AWG0_S2" ]] || err "S4+56=$S4P == S2=$AWG0_S2 — нарушение ограничения AWG"
+[[ "$S4P" -ne "$AWG0_S1" ]] || err "S4+56=$S4P == S1=$AWG0_S1 — нарушение ограничения AWG"
+[[ "$S4P" -ne "$AWG0_S2" ]] || err "S4+56=$S4P == S2=$AWG0_S2 — нарушение ограничения AWG"
 ok "S4+56=$S4P ≠ S1($AWG0_S1), ≠ S2($AWG0_S2) ✓"
 
 # Проверить наличие awg-quick бинарника
@@ -600,15 +600,18 @@ hdr "Вычисление публичного ключа"
 AWG0_PUBLIC_KEY=$(echo "${AWG0_PRIVATE_KEY}" | awg pubkey 2>/dev/null) || \
     warn "Не удалось вычислить публичный ключ через awg pubkey"
 
-if [[ -n "${AWG0_PUBLIC_KEY:-}" ]]; then
-    ok "Публичный ключ: $AWG0_PUBLIC_KEY"
-    # Записать в .env.vps если ещё нет (нужен для добавления пиров)
-    if ! grep -q "AWG0_PUBLIC_KEY" "$ENV_FILE"; then
-        echo "" >> "$ENV_FILE"
-        echo "# AWG0 публичный ключ сервера (авто-вычислен)" >> "$ENV_FILE"
-        echo "AWG0_PUBLIC_KEY=\"$AWG0_PUBLIC_KEY\"" >> "$ENV_FILE"
-        ok "AWG0_PUBLIC_KEY записан в .env.vps"
-    fi
+if [[ -z "${AWG0_PUBLIC_KEY_SAVED:-}" ]]; then
+    # Перезагрузить .env.vps чтобы учесть ранее сохранённый ключ
+    AWG0_PUBLIC_KEY_SAVED=$(grep "^AWG0_PUBLIC_KEY=" "$ENV_FILE" \
+        | cut -d= -f2- | tr -d '"' || echo "")
+fi
+if [[ -z "${AWG0_PUBLIC_KEY_SAVED:-}" ]]; then
+    echo "" >> "$ENV_FILE"
+    echo "# AWG0 публичный ключ сервера (авто-вычислен)" >> "$ENV_FILE"
+    echo "AWG0_PUBLIC_KEY=\"$AWG0_PUBLIC_KEY\"" >> "$ENV_FILE"
+    ok "AWG0_PUBLIC_KEY записан в .env.vps"
+else
+    ok "AWG0_PUBLIC_KEY уже в .env.vps — пропускаем"
 fi
 
 # Очистить приватный ключ из памяти
@@ -619,9 +622,7 @@ ok "AWG0_PRIVATE_KEY очищен из памяти"
 # Секция 7 Автозапуск — enable БЕЗ start
 # ---------------------------------------------------------------
 hdr "systemctl enable awg-quick@${AWG0_IFACE}"
-
 # is-enabled возвращает 1 если не включён — || true предотвращает ERR trap
-# Использовать ENABLED_STATUS вместо повторного вызова
 # Использовать ENABLED_STATUS вместо повторного вызова
 ENABLED_STATUS=$(systemctl is-enabled "awg-quick@${AWG0_IFACE}" 2>/dev/null || echo "disabled")
 
@@ -634,10 +635,6 @@ else
     ENABLED_STATUS="enabled"
 fi
 SERVICE_ENABLE_STATUS="$ENABLED_STATUS"
-
-# Зафиксировать итоговый статус для ИТОГ-блока
-SERVICE_ENABLE_STATUS=$(systemctl is-enabled "awg-quick@${AWG0_IFACE}" 2>/dev/null \
-    || echo "unknown")
 
 # ---------------------------------------------------------------
 # Тест синтаксиса через awg-quick strip
