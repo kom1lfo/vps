@@ -181,12 +181,11 @@ REQUIRED=(
 )
 for V in "${REQUIRED[@]}"; do
     [[ -z "${!V:-}" ]] && err "Переменная $V не задана или пустая в .env.vps"
-    # Приватные ключи не выводим в лог — security
-if [[ "$V" == *"PRIVATE_KEY"* ]]; then
-    ok "$V = [СКРЫТО]"
-else
-    ok "$V = ${!V}"
-fi
+    if [[ "$V" == *"PRIVATE_KEY"* ]]; then
+        ok "$V = [REDACTED]"
+    else
+        ok "$V = ${!V}"
+    fi
 done
 
 # Отдельная проверка длины приватного ключа (base64 WG ключ = 44 символа)
@@ -535,12 +534,14 @@ ok "Директория готова"
 # Backup существующего конфига
 # ---------------------------------------------------------------
 hdr "Резервная копия конфига"
+INSTALL_TYPE="fresh"
 if [[ -f "$CONF" ]]; then
-BACKUP_CONF="${CONF}.bak.$(date +%Y%m%d%H%M%S)"
-cp "$CONF" "$BACKUP_CONF"
-warn "Сохранён: $BACKUP_CONF"
+    INSTALL_TYPE="update"
+    BACKUP_CONF="${CONF}.bak.$(date +%Y%m%d%H%M%S)"
+    cp "$CONF" "$BACKUP_CONF"
+    warn "UPDATE: Существующий конфиг сохранён: $BACKUP_CONF"
 else
-    ok "Конфиг отсутствует — создаём новый"
+    ok "FRESH INSTALL: Конфиг не существует, создаётся с нуля"
 fi
 
 # ---------------------------------------------------------------
@@ -595,8 +596,24 @@ chmod 600 "$CONF"
 chown root:root "$CONF"
 ok "$CONF записан (chmod 600)"
 
-AWG0_PUBLIC_KEY=$(echo "${AWG0_PRIVATE_KEY}" | awg pubkey 2>/dev/null || echo "[ошибка вычисления]")
-ok "Публичный ключ сервера: ${AWG0_PUBLIC_KEY}"
+hdr "Вычисление публичного ключа"
+AWG0_PUBLIC_KEY=$(echo "${AWG0_PRIVATE_KEY}" | awg pubkey 2>/dev/null) || \
+    warn "Не удалось вычислить публичный ключ через awg pubkey"
+
+if [[ -n "${AWG0_PUBLIC_KEY:-}" ]]; then
+    ok "Публичный ключ: $AWG0_PUBLIC_KEY"
+    # Записать в .env.vps если ещё нет (нужен для добавления пиров)
+    if ! grep -q "AWG0_PUBLIC_KEY" "$ENV_FILE"; then
+        echo "" >> "$ENV_FILE"
+        echo "# AWG0 публичный ключ сервера (авто-вычислен)" >> "$ENV_FILE"
+        echo "AWG0_PUBLIC_KEY=\"$AWG0_PUBLIC_KEY\"" >> "$ENV_FILE"
+        ok "AWG0_PUBLIC_KEY записан в .env.vps"
+    fi
+fi
+
+# Только теперь — очистить приватный ключ
+unset AWG0_PRIVATE_KEY
+ok "AWG0_PRIVATE_KEY очищен из памяти"
 
 # Очистить приватный ключ из памяти
 unset AWG0_PRIVATE_KEY
@@ -610,17 +627,17 @@ hdr "systemctl enable awg-quick@${AWG0_IFACE}"
 # is-enabled возвращает 1 если не включён — || true предотвращает ERR trap
 ENABLED_STATUS=$(systemctl is-enabled "awg-quick@${AWG0_IFACE}" 2>/dev/null || true)
 
-if [[ "$ENABLED_STATUS" == "enabled" ]]; then
+if systemctl is-enabled "awg-quick@${AWG0_IFACE}" &>/dev/null; then
     ok "awg-quick@${AWG0_IFACE} уже включён в автозапуск"
 else
     SERVICE_ENABLED_BY_US=true
     systemctl enable "awg-quick@${AWG0_IFACE}"
     ok "awg-quick@${AWG0_IFACE} включён в автозапуск"
-    # Проверка: systemd должен создать симлинк awg-quick@awg0.service
-    SYMLINK="/etc/systemd/system/multi-user.target.wants/awg-quick@${AWG0_IFACE}.service"
-    [[ -L "$SYMLINK" ]] && ok "Симлинк создан: $SYMLINK" || \
-        warn "Симлинк не найден — проверь: systemctl is-enabled awg-quick@${AWG0_IFACE}"
 fi
+
+# Зафиксировать итоговый статус для ИТОГ-блока
+SERVICE_ENABLE_STATUS=$(systemctl is-enabled "awg-quick@${AWG0_IFACE}" 2>/dev/null \
+    || echo "unknown")
 
 # ---------------------------------------------------------------
 # Тест синтаксиса через awg-quick strip
@@ -628,11 +645,13 @@ fi
 # strip парсит файл и выводит stripped WG-конфиг без запуска
 # ---------------------------------------------------------------
 hdr "Тест синтаксиса: awg-quick strip ${AWG0_IFACE}"
-if ! STRIP_OUT=$(awg-quick strip "${AWG0_IFACE}" 2>&1); then
-    fail "awg-quick strip ${AWG0_IFACE} — ошибка парсинга:"
-    fail "$STRIP_OUT"
-    false   # ← exit code 1 → set -e + trap rollback ERR срабатывает ✓
-fi
+STRIP_OUTPUT=$(awg-quick strip "${AWG0_IFACE}" 2>&1) || {
+    echo ""
+    echo "$STRIP_OUTPUT"
+    err "awg-quick strip ${AWG0_IFACE} вернул ошибку — см. вывод выше"
+}
+STRIP_LINES=$(echo "$STRIP_OUTPUT" | wc -l)
+ok "Синтаксис конфига валиден ✓ (strip: ${STRIP_LINES} строк WG-конфига)"
 
 # Всё прошло успешно — отключить trap
 trap - ERR
@@ -642,16 +661,22 @@ trap - ERR
 # ---------------------------------------------------------------
 hdr "✅ ИТОГ"
 echo ""
+echo "  Тип установки  : ${INSTALL_TYPE:-fresh}"
+[[ "${INSTALL_TYPE:-fresh}" == "update" && -n "${BACKUP_CONF:-}" ]] && \
+    echo "  Резервная копия: $BACKUP_CONF"
 echo "  Шаблон юнита : /etc/systemd/system/awg-quick@.service"
 echo "  Экземпляр    : awg-quick@${AWG0_IFACE}.service"
+echo "  Интерфейс      : ${AWG0_IFACE}"
 echo "  Конфиг       : ${CONF} (chmod 600)"
 [[ -n "$BACKUP_CONF" ]] && echo "  Бекап        : ${BACKUP_CONF}"   # ← ДОБАВИТЬ
 echo "  Порт         : ${AWG0_PORT}/UDP"
-echo "  Публичный ключ : ${AWG0_PUBLIC_KEY}"
+echo "  Публичный ключ : ${AWG0_PUBLIC_KEY:-[не получен — проверь awg pubkey]}"
 echo "  Подсеть      : ${AWG0_SUBNET}  →  ${AWG0_NETWORK}"
 echo "  DNS          : ${AWG0_DNS}"
 echo "  fwmark/table : 2 / 102"
 echo "  NET iface    : ${NET_IFACE}"
+echo "  Автозапуск   : ${SERVICE_ENABLE_STATUS:-unknown}"
+echo "  Strip test   : PASS (${STRIP_LINES:-?} строк)"
 echo "  Ядро         : $(uname -r)"                                  # ← ДОБАВИТЬ
 echo "  AWG модуль   : $(lsmod | grep amneziawg | awk '{print $1, "size:"$2}' || echo 'не в lsmod')"  # ← ДОБАВИТЬ
 echo "  xt_TPROXY    : $(lsmod | grep -q xt_TPROXY && echo 'загружен ✓' || echo 'не в lsmod')"       # ← ДОБАВИТЬ
