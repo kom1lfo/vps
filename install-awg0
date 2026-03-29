@@ -180,7 +180,7 @@ REQUIRED=(
     AWG0_H1 AWG0_H2 AWG0_H3 AWG0_H4
 )
 for V in "${REQUIRED[@]}"; do
-    [[ -z "${!V:-}" ]] && err "Переменная $V не задана или пустая в .env.vps"
+    [[ -z "${!V:-}" ]] || err "Переменная $V не задана или пустая в .env.vps"
     if [[ "$V" == *"PRIVATE_KEY"* ]]; then
         ok "$V = [REDACTED]"
     else
@@ -199,7 +199,7 @@ ok "Все переменные AWG0_* присутствуют"
 hdr "Валидация AWG-параметров"
 
 # Jmin < Jmax
-[[ "$AWG0_JMIN" -ge "$AWG0_JMAX" ]] && \
+[[ "$AWG0_JMIN" -ge "$AWG0_JMAX" ]] || \
     err "Jmin($AWG0_JMIN) >= Jmax($AWG0_JMAX) — Jmin должен быть строго меньше Jmax"
 ok "Jmin($AWG0_JMIN) < Jmax($AWG0_JMAX) ✓"
 
@@ -217,14 +217,14 @@ ok "H1-H4 уникальны ✓"
 
 # S3 + 56 ≠ S1  и  S3 + 56 ≠ S2
 S3P=$(( AWG0_S3 + 56 ))
-[[ "$S3P" -eq "$AWG0_S1" ]] && err "S3+56=$S3P == S1=$AWG0_S1 — нарушение ограничения AWG"
-[[ "$S3P" -eq "$AWG0_S2" ]] && err "S3+56=$S3P == S2=$AWG0_S2 — нарушение ограничения AWG"
+[[ "$S3P" -eq "$AWG0_S1" ]] || err "S3+56=$S3P == S1=$AWG0_S1 — нарушение ограничения AWG"
+[[ "$S3P" -eq "$AWG0_S2" ]] || err "S3+56=$S3P == S2=$AWG0_S2 — нарушение ограничения AWG"
 ok "S3+56=$S3P ≠ S1($AWG0_S1), ≠ S2($AWG0_S2) ✓"
 
 # S4 + 56 ≠ S1  и  S4 + 56 ≠ S2
 S4P=$(( AWG0_S4 + 56 ))
-[[ "$S4P" -eq "$AWG0_S1" ]] && err "S4+56=$S4P == S1=$AWG0_S1 — нарушение ограничения AWG"
-[[ "$S4P" -eq "$AWG0_S2" ]] && err "S4+56=$S4P == S2=$AWG0_S2 — нарушение ограничения AWG"
+[[ "$S4P" -eq "$AWG0_S1" ]] || err "S4+56=$S4P == S1=$AWG0_S1 — нарушение ограничения AWG"
+[[ "$S4P" -eq "$AWG0_S2" ]] || err "S4+56=$S4P == S2=$AWG0_S2 — нарушение ограничения AWG"
 ok "S4+56=$S4P ≠ S1($AWG0_S1), ≠ S2($AWG0_S2) ✓"
 
 # Проверить наличие awg-quick бинарника
@@ -611,10 +611,6 @@ if [[ -n "${AWG0_PUBLIC_KEY:-}" ]]; then
     fi
 fi
 
-# Только теперь — очистить приватный ключ
-unset AWG0_PRIVATE_KEY
-ok "AWG0_PRIVATE_KEY очищен из памяти"
-
 # Очистить приватный ключ из памяти
 unset AWG0_PRIVATE_KEY
 ok "AWG0_PRIVATE_KEY очищен из памяти"
@@ -625,15 +621,19 @@ ok "AWG0_PRIVATE_KEY очищен из памяти"
 hdr "systemctl enable awg-quick@${AWG0_IFACE}"
 
 # is-enabled возвращает 1 если не включён — || true предотвращает ERR trap
-ENABLED_STATUS=$(systemctl is-enabled "awg-quick@${AWG0_IFACE}" 2>/dev/null || true)
+# Использовать ENABLED_STATUS вместо повторного вызова
+# Использовать ENABLED_STATUS вместо повторного вызова
+ENABLED_STATUS=$(systemctl is-enabled "awg-quick@${AWG0_IFACE}" 2>/dev/null || echo "disabled")
 
-if systemctl is-enabled "awg-quick@${AWG0_IFACE}" &>/dev/null; then
-    ok "awg-quick@${AWG0_IFACE} уже включён в автозапуск"
+if [[ "$ENABLED_STATUS" == "enabled" || "$ENABLED_STATUS" == "static" ]]; then
+    ok "awg-quick@${AWG0_IFACE} уже включён (${ENABLED_STATUS})"
 else
     SERVICE_ENABLED_BY_US=true
     systemctl enable "awg-quick@${AWG0_IFACE}"
     ok "awg-quick@${AWG0_IFACE} включён в автозапуск"
+    ENABLED_STATUS="enabled"
 fi
+SERVICE_ENABLE_STATUS="$ENABLED_STATUS"
 
 # Зафиксировать итоговый статус для ИТОГ-блока
 SERVICE_ENABLE_STATUS=$(systemctl is-enabled "awg-quick@${AWG0_IFACE}" 2>/dev/null \
@@ -645,11 +645,15 @@ SERVICE_ENABLE_STATUS=$(systemctl is-enabled "awg-quick@${AWG0_IFACE}" 2>/dev/nu
 # strip парсит файл и выводит stripped WG-конфиг без запуска
 # ---------------------------------------------------------------
 hdr "Тест синтаксиса: awg-quick strip ${AWG0_IFACE}"
-STRIP_OUTPUT=$(awg-quick strip "${AWG0_IFACE}" 2>&1) || {
+STRIP_FAILED=false
+STRIP_OUTPUT=$(awg-quick strip "${AWG0_IFACE}" 2>&1) || STRIP_FAILED=true
+
+if [[ "$STRIP_FAILED" == true ]]; then
     echo ""
     echo "$STRIP_OUTPUT"
-    err "awg-quick strip ${AWG0_IFACE} вернул ошибку — см. вывод выше"
-}
+    echo -e "\n${R}[ERR]${NC} awg-quick strip ${AWG0_IFACE} вернул ошибку\n"
+    false  # false возвращает код 1 → ERR trap → rollback() корректно срабатывает
+fi
 STRIP_LINES=$(echo "$STRIP_OUTPUT" | wc -l)
 ok "Синтаксис конфига валиден ✓ (strip: ${STRIP_LINES} строк WG-конфига)"
 
@@ -668,7 +672,6 @@ echo "  Шаблон юнита : /etc/systemd/system/awg-quick@.service"
 echo "  Экземпляр    : awg-quick@${AWG0_IFACE}.service"
 echo "  Интерфейс      : ${AWG0_IFACE}"
 echo "  Конфиг       : ${CONF} (chmod 600)"
-[[ -n "$BACKUP_CONF" ]] && echo "  Бекап        : ${BACKUP_CONF}"   # ← ДОБАВИТЬ
 echo "  Порт         : ${AWG0_PORT}/UDP"
 echo "  Публичный ключ : ${AWG0_PUBLIC_KEY:-[не получен — проверь awg pubkey]}"
 echo "  Подсеть      : ${AWG0_SUBNET}  →  ${AWG0_NETWORK}"
@@ -682,7 +685,7 @@ echo "  AWG модуль   : $(lsmod | grep amneziawg | awk '{print $1, "size:"$
 echo "  xt_TPROXY    : $(lsmod | grep -q xt_TPROXY && echo 'загружен ✓' || echo 'не в lsmod')"       # ← ДОБАВИТЬ
 echo "  ip_forward   : $(sysctl -n net.ipv4.ip_forward)"             # ← ДОБАВИТЬ
 echo "  Обфускация   : Jc=${AWG0_JC} Jmin=${AWG0_JMIN} Jmax=${AWG0_JMAX} S1=${AWG0_S1} S2=${AWG0_S2} S3=${AWG0_S3} S4=${AWG0_S4}"
-echo "  State файл   : ${STATE_FILE}"                                 # ← ДОБАВИТЬ
+echo "  State файл     : ${STATE_FILE} ($(wc -l < "$STATE_FILE" 2>/dev/null || echo 0) шагов)"
 echo ""
 warn "НЕ ЗАПУЩЕН — старт только после установки AGH:"
 warn "  awg-quick up ${AWG0_IFACE}"
