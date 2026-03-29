@@ -87,6 +87,7 @@ hdr "Что НАМЕРЕННО НЕ установлено"
 echo "  bind9, dnsmasq  — заняли бы порт 53 (нужен AGH)"
 echo "  nginx           — установится в фазе WGDashboard"
 echo "  certbot         — 3x-ui использует встроенный ACME"
+echo "  openresolv перенесён в отдельный скрипт настройки WG"
 echo "  resolvconf (старый Debian-пакет) — конфликтует с openresolv"
 
 hdr "✅ Итог"
