@@ -1,0 +1,671 @@
+#!/bin/bash
+# =============================================================
+# install-awg0.sh — AmneziaWG (awg0) на Debian 12
+# =============================================================
+set -euo pipefail
+
+# ─── Цвета ───────────────────────────────────────────────────
+G='\033[0;32m'    # green
+Y='\033[1;33m'    # yellow
+R='\033[0;31m'    # red
+C='\033[0;36m'    # cyan
+NC='\033[0m'
+
+# ─── Функции вывода ──────────────────────────────────────────
+hdr()     { echo -e "\n${Y}════ $1 ════${NC}"; }
+ok()      { echo -e "  ${G}[OK]${NC}    $1"; }
+warn()    { echo -e "  ${Y}[WARN]${NC}  $1"; }
+skip()    { echo -e "  ${C}[SKIP]${NC}  $1"; }
+running() { echo -e "  ${C}[..]${NC}    $1"; }
+result()  { echo -e "  ${G}[→]${NC}     $1"; }
+fail()    { echo -e "  ${R}[FAIL]${NC}  $1"; }
+die()     { echo -e "\n${R}[FATAL]${NC} $1\n"; exit 1; }
+
+# ─── State-система (идемпотентность) ─────────────────────────
+# Каждый выполненный шаг записывается в state-файл.
+# При повторном запуске шаг пропускается.
+STATE_DIR="/root/.vps-install-state"
+STATE_FILE="$STATE_DIR/awg0"
+mkdir -p "$STATE_DIR"
+
+step_done() { grep -qxF "$1" "$STATE_FILE" 2>/dev/null; }
+mark_done() { grep -qxF "$1" "$STATE_FILE" 2>/dev/null || echo "$1" >> "$STATE_FILE"; }
+
+# ─── Root check ──────────────────────────────────────────────
+[[ $EUID -ne 0 ]] && die "Запускай только от root"
+
+KERNEL=$(uname -r)
+
+
+# =============================================================
+# ШАГ 1 / 4 — GPG-ключ Amnezia
+# =============================================================
+hdr "ШАГ 1 / 4 — GPG-ключ Amnezia"
+
+GPG_FILE="/usr/share/keyrings/amnezia.gpg"
+GPG_KEY="75c9dd72c799870e310542e24166f2c257290828"
+
+if step_done "GPG_ADDED"; then
+    skip "GPG-ключ уже добавлен (state-файл)"
+    result "GPG=SKIP"
+elif [[ -f "$GPG_FILE" ]]; then
+    skip "GPG-файл уже существует: $GPG_FILE"
+    mark_done "GPG_ADDED"
+    result "GPG=SKIP"
+else
+    GPG_OK=false
+    # keyserver.ubuntu.com — основной; keys.openpgp.org — резервный
+    # pool.sks-keyservers.net МЁРТВ с 2021 — не использовать
+    for KS in "keyserver.ubuntu.com" "keys.openpgp.org"; do
+        running "Получаем GPG-ключ с $KS..."
+        if gpg --keyserver "$KS" --recv-keys "$GPG_KEY" 2>/dev/null; then
+            gpg --export "$GPG_KEY" | tee "$GPG_FILE" > /dev/null
+            ok "GPG-ключ получен с $KS → $GPG_FILE"
+            GPG_OK=true
+            break
+        else
+            fail "Keyserver $KS недоступен"
+        fi
+    done
+    [[ "$GPG_OK" == false ]] && die "Не удалось получить GPG-ключ ни с одного сервера"
+    mark_done "GPG_ADDED"
+    result "GPG=OK"
+fi
+
+# =============================================================
+# ШАГ 2 / 4 — APT-репозиторий Amnezia PPA
+# =============================================================
+hdr "ШАГ 2 / 4 — APT-репозиторий Amnezia PPA"
+
+REPO_FILE="/etc/apt/sources.list.d/amnezia.list"
+
+if step_done "REPO_ADDED"; then
+    skip "Репозиторий уже добавлен (state-файл)"
+    result "REPO=SKIP"
+elif [[ -f "$REPO_FILE" ]]; then
+    skip "Файл репозитория уже существует: $REPO_FILE"
+    mark_done "REPO_ADDED"
+    result "REPO=SKIP"
+else
+    running "Создаём $REPO_FILE..."
+    cat > "$REPO_FILE" << 'EOF'
+deb [signed-by=/usr/share/keyrings/amnezia.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main
+deb-src [signed-by=/usr/share/keyrings/amnezia.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main
+EOF
+    running "apt-get update после добавления репозитория..."
+    apt-get update -q || die "apt-get update завершился с ошибкой после добавления PPA"
+    mark_done "REPO_ADDED"
+    ok "Репозиторий добавлен, индекс обновлён"
+    result "REPO=OK"
+fi
+
+# =============================================================
+# ШАГ 3 / 4 — Установка пакетов amneziawg + amneziawg-tools
+# =============================================================
+hdr "ШАГ 3 / 4 — Пакеты amneziawg + amneziawg-tools"
+
+pkg_installed() {
+    dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "install ok installed"
+}
+
+if step_done "PKG_INSTALLED"; then
+    skip "Пакеты уже установлены (state-файл)"
+    result "PKG=SKIP"
+elif pkg_installed "amneziawg" && pkg_installed "amneziawg-tools"; then
+    skip "amneziawg и amneziawg-tools уже установлены"
+    mark_done "PKG_INSTALLED"
+    result "PKG=SKIP"
+else
+    running "Установка amneziawg amneziawg-tools"
+    warn "DKMS-сборка для ядра $KERNEL — займёт 2–5 минут, не прерывай"
+    if apt-get install -y amneziawg amneziawg-tools; then
+        ok "Пакеты установлены"
+        mark_done "PKG_INSTALLED"
+        result "PKG=OK"
+    else
+        die "apt-get install amneziawg завершился с ошибкой. Проверь: apt-get install -y amneziawg"
+    fi
+fi
+
+# =============================================================
+# ШАГ 4 / 4 — Проверка модуля ядра amneziawg
+# =============================================================
+hdr "ШАГ 4 / 4 — Модуль ядра amneziawg"
+
+running "modprobe amneziawg..."
+if modprobe amneziawg 2>/dev/null; then
+    ok "modprobe amneziawg — успешно"
+else
+    warn "modprobe amneziawg не сработал"
+    DKMS_STATUS=$(dkms status amneziawg 2>/dev/null || echo "not found")
+    warn "dkms status: $DKMS_STATUS"
+    if echo "$DKMS_STATUS" | grep -q "installed"; then
+        warn "Модуль есть в DKMS но не загрузился — вероятно нужна перезагрузка"
+        warn "Выполни: reboot — затем перезапусти скрипт"
+        result "MODULE=WARN (reboot needed)"
+        exit 0
+    else
+        die "Модуль amneziawg не установлен. Проверь: dkms status && dpkg -l amneziawg-dkms"
+    fi
+fi
+
+if lsmod | grep -q "^amneziawg"; then
+    ok "lsmod: amneziawg активен ✓"
+    result "MODULE=OK"
+else
+    # modprobe прошёл успешно, но lsmod не видит — нестандартная ситуация
+    warn "modprobe вернул 0, но lsmod не видит модуль"
+    warn "Продолжаем — awg-quick сам подгрузит модуль при старте"
+    result "MODULE=WARN (lsmod miss)"
+fi
+
+
+
+
+
+# =============================================================
+# СЕКЦИЯ 1: Загрузка и валидация (без изменений системы)
+# Rollback trap НЕ активен — нечего откатывать
+# =============================================================
+
+hdr "Загрузка .env.vps"
+ENV_FILE="/root/.env.vps"
+[[ ! -f "$ENV_FILE" ]] && err ".env.vps не найден: $ENV_FILE"
+source "$ENV_FILE"
+ok "Переменные загружены из $ENV_FILE"
+
+# --- Проверить все обязательные переменные AWG0_* ---
+hdr "Проверка переменных AWG0_*"
+REQUIRED=(
+    AWG0_IFACE AWG0_PORT AWG0_SUBNET AWG0_DNS AWG0_PRIVATE_KEY
+    AWG0_JC AWG0_JMIN AWG0_JMAX
+    AWG0_S1 AWG0_S2 AWG0_S3 AWG0_S4
+    AWG0_H1 AWG0_H2 AWG0_H3 AWG0_H4
+)
+for V in "${REQUIRED[@]}"; do
+    [[ -z "${!V:-}" ]] && err "Переменная $V не задана или пустая в .env.vps"
+    # Приватные ключи не выводим в лог — security
+    if [[ "$V" == *"PRIVATE_KEY"* ]]; then
+        ok "$V = [СКРЫТО, длина: ${#!V} символов]" 2>/dev/null || \
+        ok "$V = [СКРЫТО]"
+    else
+        ok "$V = ${!V}"
+    fi
+done
+
+# Отдельная проверка длины приватного ключа (base64 WG ключ = 44 символа)
+if [[ ${#AWG0_PRIVATE_KEY} -ne 44 ]]; then
+    warn "AWG0_PRIVATE_KEY: длина ${#AWG0_PRIVATE_KEY} символов (ожидается 44)"
+    warn "Убедись что ключ сгенерирован командой: awg genkey"
+fi
+ok "Все переменные AWG0_* присутствуют"
+
+# --- Валидация параметров обфускации ---
+hdr "Валидация AWG-параметров"
+
+# Jmin < Jmax
+[[ "$AWG0_JMIN" -ge "$AWG0_JMAX" ]] && \
+    err "Jmin($AWG0_JMIN) >= Jmax($AWG0_JMAX) — Jmin должен быть строго меньше Jmax"
+ok "Jmin($AWG0_JMIN) < Jmax($AWG0_JMAX) ✓"
+
+# H1-H4 должны быть уникальны между собой
+HVALS=("$AWG0_H1" "$AWG0_H2" "$AWG0_H3" "$AWG0_H4")
+HNAMES=("H1" "H2" "H3" "H4")
+for i in 0 1 2 3; do
+    for j in 0 1 2 3; do
+        if [[ $i -ne $j && "${HVALS[$i]}" == "${HVALS[$j]}" ]]; then
+            err "${HNAMES[$i]}(${HVALS[$i]}) == ${HNAMES[$j]}(${HVALS[$j]}) — H1-H4 должны быть уникальны"
+        fi
+    done
+done
+ok "H1-H4 уникальны ✓"
+
+# S3 + 56 ≠ S1  и  S3 + 56 ≠ S2
+S3P=$(( AWG0_S3 + 56 ))
+[[ "$S3P" -eq "$AWG0_S1" ]] && err "S3+56=$S3P == S1=$AWG0_S1 — нарушение ограничения AWG"
+[[ "$S3P" -eq "$AWG0_S2" ]] && err "S3+56=$S3P == S2=$AWG0_S2 — нарушение ограничения AWG"
+ok "S3+56=$S3P ≠ S1($AWG0_S1), ≠ S2($AWG0_S2) ✓"
+
+# S4 + 56 ≠ S1  и  S4 + 56 ≠ S2
+S4P=$(( AWG0_S4 + 56 ))
+[[ "$S4P" -eq "$AWG0_S1" ]] && err "S4+56=$S4P == S1=$AWG0_S1 — нарушение ограничения AWG"
+[[ "$S4P" -eq "$AWG0_S2" ]] && err "S4+56=$S4P == S2=$AWG0_S2 — нарушение ограничения AWG"
+ok "S4+56=$S4P ≠ S1($AWG0_S1), ≠ S2($AWG0_S2) ✓"
+
+# --- Проверить AWG kernel module ---
+hdr "Проверка amneziawg kernel module"
+if ! lsmod | grep -q "^amneziawg"; then
+    warn "Модуль не загружен — пробуем modprobe"
+    modprobe amneziawg 2>/dev/null || true
+    sleep 1
+    if ! lsmod | grep -q "^amneziawg"; then
+        err "amneziawg module не загрузился. Проверь: dpkg -l amneziawg-dkms && uname -r"
+    fi
+fi
+ok "amneziawg module загружен ✓"
+
+# Проверить наличие awg-quick бинарника
+AWG_QUICK=$(command -v awg-quick 2>/dev/null) || \
+    err "awg-quick не найден. Проверь: apt-get install amneziawg-tools"
+ok "awg-quick: $AWG_QUICK"
+
+# --- Автоопределение сетевого интерфейса ---
+hdr "Определение сетевого интерфейса"
+NET_IFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -1)
+[[ -z "$NET_IFACE" ]] && err "Не удалось определить сетевой интерфейс"
+ok "NET_IFACE: $NET_IFACE"
+
+# --- Вычислить AWG0_NETWORK из AWG0_SUBNET ---
+# Производная величина — не добавляется в .env.vps
+AWG0_NETWORK=$(python3 -c "import ipaddress; print(str(ipaddress.ip_interface('${AWG0_SUBNET}').network))" 2>/dev/null) || \
+    err "Не удалось вычислить сеть из AWG0_SUBNET='$AWG0_SUBNET'. Проверь формат: 10.x.x.x/24"
+ok "AWG0_NETWORK: $AWG0_NETWORK (из $AWG0_SUBNET)"
+
+
+# =============================================================
+# СЕКЦИЯ 0A: DNS — проверка, openresolv, минимальные правки
+# Логика: 1) detect manager  2) test DNS  3) точечные правки
+#         4) resolvconf -u   5) финальная проверка
+# =============================================================
+hdr "СЕКЦИЯ 0A: DNS"
+
+# --- 1. openresolv ---
+if ! command -v resolvconf &>/dev/null; then
+    warn "openresolv не установлен — устанавливаем"
+    apt-get update -q
+    apt-get install -y openresolv
+    ok "openresolv установлен"
+else
+    ok "openresolv установлен ✓"
+fi
+
+# --- 2. Определить как управляется /etc/resolv.conf ---
+if [[ -L /etc/resolv.conf ]]; then
+    RESOLV_TARGET=$(readlink -f /etc/resolv.conf)
+    if echo "$RESOLV_TARGET" | grep -q "systemd"; then
+        DNS_MANAGER="systemd-resolved"
+    else
+        DNS_MANAGER="symlink"
+    fi
+    warn "resolv.conf — симлинк → $RESOLV_TARGET (менеджер: $DNS_MANAGER)"
+elif head -3 /etc/resolv.conf 2>/dev/null | grep -qi "Generated by resolvconf"; then
+    DNS_MANAGER="resolvconf"
+    ok "resolv.conf управляется resolvconf"
+else
+    DNS_MANAGER="static"
+    ok "resolv.conf — статический файл"
+fi
+ok "DNS менеджер: $DNS_MANAGER"
+
+# --- 3. Получить текущий nameserver (исключаем loopback 127.x.x.x) ---
+CURRENT_NS=$(grep '^nameserver' /etc/resolv.conf 2>/dev/null \
+    | awk '{print $2}' \
+    | grep -v '^127\.' \
+    | head -1 || true)
+
+if [[ -z "$CURRENT_NS" ]]; then
+    # Fallback: взять из resolvconf.conf или 8.8.8.8
+    CURRENT_NS=$(grep "^name_servers=" /etc/resolvconf.conf 2>/dev/null \
+        | cut -d= -f2 | awk '{print $1}' || echo "8.8.8.8")
+    warn "Публичный nameserver не найден в resolv.conf — берём: $CURRENT_NS"
+else
+    ok "Текущий nameserver: $CURRENT_NS"
+fi
+
+# --- 4. Тест DNS ---
+if dig +short +time=3 google.com "@${CURRENT_NS}" > /dev/null 2>&1; then
+    ok "DNS через $CURRENT_NS работает ✓"
+elif dig +short +time=3 google.com @8.8.8.8 > /dev/null 2>&1; then
+    warn "DNS через $CURRENT_NS не работает — переключаемся на 8.8.8.8"
+    CURRENT_NS="8.8.8.8"
+else
+    err "Ни $CURRENT_NS ни 8.8.8.8 не доступны — сетевая проблема вне DNS"
+fi
+
+# --- 5. Точечные правки /etc/resolvconf.conf ---
+RESOLVCONF_FILE="/etc/resolvconf.conf"
+RESOLVCONF_CHANGED=false
+
+# Создать файл если нет (openresolv мог не создать)
+if [[ ! -f "$RESOLVCONF_FILE" ]]; then
+    touch "$RESOLVCONF_FILE"
+    warn "$RESOLVCONF_FILE создан (отсутствовал)"
+fi
+
+# 5a. resolv_conf_options должен содержать trust-ad
+if grep -q "^resolv_conf_options=" "$RESOLVCONF_FILE" 2>/dev/null; then
+    CUR_OPTS=$(grep "^resolv_conf_options=" "$RESOLVCONF_FILE" \
+        | head -1 | cut -d= -f2- | tr -d '"')
+    if echo "$CUR_OPTS" | grep -q "trust-ad"; then
+        ok "resolv_conf_options содержит trust-ad ✓"
+    else
+        # Добавить trust-ad к существующим опциям не затирая их
+        NEW_OPTS="${CUR_OPTS:+${CUR_OPTS} }trust-ad"
+        sed -i "s|^resolv_conf_options=.*|resolv_conf_options=\"${NEW_OPTS}\"|" "$RESOLVCONF_FILE"
+        RESOLVCONF_CHANGED=true
+        ok "trust-ad добавлен в resolv_conf_options"
+    fi
+else
+    echo 'resolv_conf_options="trust-ad"' >> "$RESOLVCONF_FILE"
+    RESOLVCONF_CHANGED=true
+    ok 'resolv_conf_options="trust-ad" — добавлено'
+fi
+
+# 5b. name_servers должен присутствовать
+if ! grep -q "^name_servers=" "$RESOLVCONF_FILE" 2>/dev/null; then
+    echo "name_servers=${CURRENT_NS}" >> "$RESOLVCONF_FILE"
+    echo "prepend_nameservers=${CURRENT_NS}" >> "$RESOLVCONF_FILE"
+    RESOLVCONF_CHANGED=true
+    ok "name_servers=${CURRENT_NS} — добавлено"
+else
+    ok "name_servers уже задан: $(grep '^name_servers=' "$RESOLVCONF_FILE" | cut -d= -f2)"
+fi
+
+# --- 6. Применить resolvconf -u ---
+# Условия запуска: resolvconf.conf изменился ИЛИ resolv.conf не содержит trust-ad
+# Исключение: systemd-resolved управляет resolv.conf — не трогать
+if [[ "$DNS_MANAGER" == "systemd-resolved" ]]; then
+    warn "systemd-resolved управляет resolv.conf — resolvconf -u пропущен"
+    warn "Если AGH конфликтует с stub listener: см. DNSStubListener=no"
+elif [[ "$RESOLVCONF_CHANGED" == true ]] \
+    || ! grep -q "trust-ad" /etc/resolv.conf 2>/dev/null; then
+    resolvconf -u
+    ok "resolvconf -u выполнен — resolv.conf регенерирован"
+else
+    ok "Изменений нет, trust-ad уже в resolv.conf — resolvconf -u не нужен"
+fi
+
+# --- 7. Финальная проверка ---
+if grep -q "trust-ad" /etc/resolv.conf 2>/dev/null; then
+    ok "options trust-ad в /etc/resolv.conf ✓"
+else
+    NS_IN_RESOLV=$(grep '^nameserver' /etc/resolv.conf | head -1 | awk '{print $2}')
+    if [[ "$NS_IN_RESOLV" == "127.0.0.1" ]]; then
+        warn "resolv.conf → 127.0.0.1 (ожидаемо до установки AGH)"
+    else
+        warn "trust-ad не появился в resolv.conf — проверь вручную: cat /etc/resolv.conf"
+    fi
+fi
+
+# Финальный тест DNS
+if dig +short +time=3 google.com > /dev/null 2>&1; then
+    ok "Финальный тест DNS: разрешается ✓"
+else
+    NS_CHECK=$(grep '^nameserver' /etc/resolv.conf | head -1 | awk '{print $2}')
+    if [[ "$NS_CHECK" == "127.0.0.1" || "$NS_CHECK" == "10.10.10.10" ]]; then
+        warn "DNS через $NS_CHECK не работает — ожидаемо, AGH не установлен"
+    else
+        warn "DNS не работает через системные настройки — проверь: dig google.com"
+    fi
+fi
+
+# =============================================================
+# СЕКЦИЯ 0B: sysctl — проверка параметров, применение если нужно
+# Файл: /etc/sysctl.d/99-ip-sysctl.conf
+# =============================================================
+hdr "СЕКЦИЯ 0B: sysctl параметры"
+SYSCTL_FILE="/etc/sysctl.d/99-ip-sysctl.conf"
+touch "$SYSCTL_FILE"
+
+declare -A SYSCTL_NEEDED=(
+    ["net.ipv4.ip_forward"]="1"
+    ["net.ipv4.conf.all.route_localnet"]="1"
+    ["net.ipv4.conf.default.rp_filter"]="0"
+    ["net.core.somaxconn"]="4096"
+    ["net.ipv4.tcp_max_syn_backlog"]="4096"
+)
+
+SYSCTL_CHANGED=false
+for KEY in "${!SYSCTL_NEEDED[@]}"; do
+    EXPECTED="${SYSCTL_NEEDED[$KEY]}"
+    ACTUAL=$(sysctl -n "$KEY" 2>/dev/null || echo "")
+    if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+        warn "$KEY = '${ACTUAL:-не задан}' → нужно $EXPECTED"
+        if grep -q "^${KEY}" "$SYSCTL_FILE" 2>/dev/null; then
+            sed -i "s|^${KEY}.*|${KEY}=${EXPECTED}|" "$SYSCTL_FILE"
+        else
+            echo "${KEY}=${EXPECTED}" >> "$SYSCTL_FILE"
+        fi
+        SYSCTL_CHANGED=true
+    else
+        ok "$KEY = $ACTUAL ✓"
+    fi
+done
+
+if [[ "$SYSCTL_CHANGED" == true ]]; then
+    sysctl -p "$SYSCTL_FILE" > /dev/null
+    ok "sysctl применён из $SYSCTL_FILE"
+else
+    ok "Все sysctl параметры корректны — изменений нет"
+fi
+
+# ip_forward — без него туннель физически не работает
+[[ "$(sysctl -n net.ipv4.ip_forward)" == "1" ]] \
+    && ok "net.ipv4.ip_forward=1 ✓" \
+    || err "net.ipv4.ip_forward≠1 после sysctl — критическая ошибка"
+
+# =============================================================
+# СЕКЦИЯ 0C: xt_TPROXY kernel module
+# TPROXY — требует xt_TPROXY в ядре (стандартный Debian 12 KVM ✓)
+# =============================================================
+hdr "СЕКЦИЯ 0C: xt_TPROXY kernel module"
+
+if lsmod | grep -q "^xt_TPROXY"; then
+    ok "xt_TPROXY уже загружен ✓"
+elif modprobe xt_TPROXY 2>/dev/null; then
+    ok "xt_TPROXY загружен через modprobe ✓"
+    # Добавить в автозагрузку при старте системы
+    if ! grep -q "^xt_TPROXY" /etc/modules 2>/dev/null; then
+        echo "xt_TPROXY" >> /etc/modules
+        ok "xt_TPROXY добавлен в /etc/modules (автозагрузка)"
+    fi
+else
+    warn "xt_TPROXY не загружается — PostUp TPROXY-правила могут не работать"
+    warn "Диагностика: modinfo xt_TPROXY && uname -r"
+    # Не останавливаем скрипт: TPROXY может быть встроен статически в ядро
+fi
+
+
+# =============================================================
+# СЕКЦИЯ 2: Изменения системы — с этого момента активен rollback
+# =============================================================
+
+CONF="/etc/amnezia/amneziawg/${AWG0_IFACE}.conf"
+BACKUP_CONF=""
+SERVICE_ENABLED_BY_US=false
+
+rollback() {
+    local CODE=$?
+    echo -e "\n${RED}[ERR]${NC} Ошибка (код: $CODE) — откат изменений..."
+
+    # Всегда очищаем ключ из памяти при любом выходе
+    unset AWG0_PRIVATE_KEY 2>/dev/null || true
+
+    # Восстановить конфиг
+    if [[ -n "$BACKUP_CONF" && -f "$BACKUP_CONF" ]]; then
+        # Был существующий конфиг — восстановить из backup
+        cp "$BACKUP_CONF" "$CONF"
+        chmod 600 "$CONF"
+        warn "Конфиг восстановлен из: $BACKUP_CONF"
+    elif [[ -f "$CONF" && -z "$BACKUP_CONF" ]]; then
+        # Конфиг создан нами с нуля — удалить
+        rm -f "$CONF"
+        warn "Новый конфиг удалён: $CONF"
+    fi
+
+    # Откатить enable только если МЫ его включали
+    if [[ "$SERVICE_ENABLED_BY_US" == true ]]; then
+        systemctl disable "awg-quick@${AWG0_IFACE}" 2>/dev/null || true
+        warn "Автозапуск awg-quick@${AWG0_IFACE} отключён"
+    fi
+
+    echo -e "${RED}  Откат завершён. Исправь ошибку и запусти скрипт повторно.${NC}"
+    exit "$CODE"
+}
+
+trap rollback ERR
+
+# ---------------------------------------------------------------
+# Проверить и создать шаблон awg-quick@.service
+# ВАЖНО: создаётся ШАБЛОН awg-quick@.service (без имени интерфейса)
+# Экземпляр awg-quick@awg0.service systemd создаёт сам при enable
+# ---------------------------------------------------------------
+hdr "Проверка awg-quick@.service (шаблон)"
+if systemctl cat awg-quick@.service &>/dev/null; then
+    ok "Шаблон awg-quick@.service существует — пропускаем"
+else
+    warn "Шаблон отсутствует (amneziawg-tools его не включает) — создаём"
+    # Одинарные кавычки у 'UNIT' — переменные внутри НЕ раскрываются
+    # %i и %I — это systemd-спецификаторы, не bash-переменные
+    cat > /etc/systemd/system/awg-quick@.service << 'UNIT'
+[Unit]
+Description=AmneziaWG via awg-quick(8) for %I
+After=network-online.target nss-lookup.target
+Wants=network-online.target nss-lookup.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/awg-quick up %i
+ExecStop=/usr/bin/awg-quick down %i
+Environment=WG_ENDPOINT_RESOLUTION_RETRIES=infinity
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+    chmod 644 /etc/systemd/system/awg-quick@.service
+    systemctl daemon-reload
+    ok "awg-quick@.service создан, daemon-reload выполнен"
+fi
+
+# ---------------------------------------------------------------
+# Директория конфигов AWG
+# ---------------------------------------------------------------
+hdr "Директория /etc/amnezia/amneziawg/"
+mkdir -p /etc/amnezia/amneziawg
+chmod 700 /etc/amnezia/amneziawg
+ok "Директория готова"
+
+# ---------------------------------------------------------------
+# Backup существующего конфига
+# ---------------------------------------------------------------
+hdr "Резервная копия конфига"
+if [[ -f "$CONF" ]]; then
+    BACKUP_CONF="${CONF}.bak.$(date +%Y%m%d%H%M%S)"
+    cp "$BACKUP_CONF" "$BACKUP_CONF" 2>/dev/null || cp "$CONF" "$BACKUP_CONF"
+    warn "Сохранён: $BACKUP_CONF"
+else
+    ok "Конфиг отсутствует — создаём новый"
+fi
+
+# ---------------------------------------------------------------
+# Запись конфига строго из .env.vps
+# ---------------------------------------------------------------
+hdr "Запись ${CONF}"
+cat > "$CONF" << EOF
+[Interface]
+Address = ${AWG0_SUBNET}
+DNS = ${AWG0_DNS}
+MTU = 1280
+Table = off
+PostUp = sysctl -w net.ipv4.conf.%i.rp_filter=0 || true
+PostUp = sysctl -w net.ipv4.ip_forward=1 || true
+PostUp = iptables -t mangle -C PREROUTING -m mark --mark 255 -j RETURN 2>/dev/null || iptables -t mangle -I PREROUTING 1 -m mark --mark 255 -j RETURN
+PostUp = ip rule add fwmark 2 table 102
+PostUp = ip route add local default dev lo table 102
+PostUp = ip route add ${AWG0_NETWORK} dev %i table 102
+PostUp = iptables -t mangle -N AWG0_TPROXY || true
+PostUp = iptables -t mangle -F AWG0_TPROXY
+PostUp = iptables -t mangle -A AWG0_TPROXY -d 127.0.0.0/8 -j RETURN
+PostUp = iptables -t mangle -A AWG0_TPROXY -p tcp -j TPROXY --on-port 12345 --tproxy-mark 2
+PostUp = iptables -t mangle -A AWG0_TPROXY -p udp -j TPROXY --on-port 12345 --tproxy-mark 2
+PostUp = iptables -t mangle -C PREROUTING -i %i -j AWG0_TPROXY 2>/dev/null || iptables -t mangle -A PREROUTING -i %i -j AWG0_TPROXY
+PostUp = iptables -I FORWARD 1 -i %i -j ACCEPT
+PostUp = iptables -I FORWARD 1 -o %i -j ACCEPT
+PostUp = iptables -t nat -I POSTROUTING 1 -s ${AWG0_NETWORK} -o ${NET_IFACE} -j MASQUERADE
+PostDown = ip rule del fwmark 2 table 102 || true
+PostDown = ip route flush table 102 || true
+PostDown = iptables -t mangle -D PREROUTING -i %i -j AWG0_TPROXY || true
+PostDown = iptables -t mangle -F AWG0_TPROXY || true
+PostDown = iptables -t mangle -X AWG0_TPROXY || true
+PostDown = iptables -D FORWARD -i %i -j ACCEPT || true
+PostDown = iptables -D FORWARD -o %i -j ACCEPT || true
+PostDown = iptables -t nat -D POSTROUTING -s ${AWG0_NETWORK} -o ${NET_IFACE} -j MASQUERADE || true
+ListenPort = ${AWG0_PORT}
+PrivateKey = ${AWG0_PRIVATE_KEY}
+Jc = ${AWG0_JC}
+Jmin = ${AWG0_JMIN}
+Jmax = ${AWG0_JMAX}
+S1 = ${AWG0_S1}
+S2 = ${AWG0_S2}
+S3 = ${AWG0_S3}
+S4 = ${AWG0_S4}
+H1 = ${AWG0_H1}
+H2 = ${AWG0_H2}
+H3 = ${AWG0_H3}
+H4 = ${AWG0_H4}
+EOF
+
+chmod 600 "$CONF"
+chown root:root "$CONF"
+ok "$CONF записан (chmod 600)"
+
+# Очистить приватный ключ из памяти
+unset AWG0_PRIVATE_KEY
+ok "AWG0_PRIVATE_KEY очищен из памяти"
+
+# ---------------------------------------------------------------
+# Автозапуск — enable БЕЗ start
+# ---------------------------------------------------------------
+hdr "systemctl enable awg-quick@${AWG0_IFACE}"
+
+# is-enabled возвращает 1 если не включён — || true предотвращает ERR trap
+ENABLED_STATUS=$(systemctl is-enabled "awg-quick@${AWG0_IFACE}" 2>/dev/null || true)
+
+if [[ "$ENABLED_STATUS" == "enabled" ]]; then
+    ok "awg-quick@${AWG0_IFACE} уже включён в автозапуск"
+else
+    SERVICE_ENABLED_BY_US=true
+    systemctl enable "awg-quick@${AWG0_IFACE}"
+    ok "awg-quick@${AWG0_IFACE} включён в автозапуск"
+    # Проверка: systemd должен создать симлинк awg-quick@awg0.service
+    SYMLINK="/etc/systemd/system/multi-user.target.wants/awg-quick@${AWG0_IFACE}.service"
+    [[ -L "$SYMLINK" ]] && ok "Симлинк создан: $SYMLINK" || \
+        warn "Симлинк не найден — проверь: systemctl is-enabled awg-quick@${AWG0_IFACE}"
+fi
+
+# ---------------------------------------------------------------
+# Тест синтаксиса через awg-quick strip
+# awg-quick читает из /etc/amnezia/amneziawg/<iface>.conf
+# strip парсит файл и выводит stripped WG-конфиг без запуска
+# ---------------------------------------------------------------
+hdr "Тест синтаксиса: awg-quick strip ${AWG0_IFACE}"
+STRIP_OUT=$(awg-quick strip "${AWG0_IFACE}" 2>&1) && {
+    ok "Синтаксис конфига валиден ✓"
+} || {
+    err "awg-quick strip ${AWG0_IFACE} — ошибка парсинга конфига:
+${STRIP_OUT}"
+}
+
+# Всё прошло успешно — отключить trap
+trap - ERR
+
+# ---------------------------------------------------------------
+# ИТОГ
+# ---------------------------------------------------------------
+hdr "✅ ИТОГ"
+echo ""
+echo "  Шаблон юнита : /etc/systemd/system/awg-quick@.service"
+echo "  Экземпляр    : awg-quick@${AWG0_IFACE}.service (создан systemd)"
+echo "  Конфиг       : ${CONF} (chmod 600)"
+echo "  Порт         : ${AWG0_PORT}/UDP"
+echo "  Подсеть      : ${AWG0_SUBNET}  →  ${AWG0_NETWORK}"
+echo "  DNS          : ${AWG0_DNS}"
+echo "  fwmark/table : 2 / 102"
+echo "  NET iface    : ${NET_IFACE}"
+echo ""
+warn "НЕ ЗАПУЩЕН — старт только после установки AGH:"
+warn "  awg-quick up ${AWG0_IFACE}"
+warn "  awg show ${AWG0_IFACE}"
+ok "Скрипт завершён без ошибок"
